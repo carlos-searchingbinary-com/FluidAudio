@@ -309,6 +309,8 @@ struct OfflineEmbeddingExtractor {
             }
 
             for (info, rho) in zip(pendingMetadata, rhoBatch) {
+                let norm = sqrt(rho.reduce(0.0) { $0 + $1 * $1 })
+                let rhoNormalized: [Double] = norm > 1e-10 ? rho.map { $0 / norm } : rho
                 let timedEmbedding = TimedEmbedding(
                     chunkIndex: info.chunkIndex,
                     speakerIndex: info.speakerIndex,
@@ -318,7 +320,8 @@ struct OfflineEmbeddingExtractor {
                     startTime: info.startTime,
                     endTime: info.endTime,
                     embedding256: info.embedding256,
-                    rho128: rho
+                    rho128: rho,
+                    rhoNormalized128: rhoNormalized
                 )
                 embeddings.append(timedEmbedding)
             }

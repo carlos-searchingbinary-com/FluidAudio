@@ -566,6 +566,7 @@ struct TimedEmbedding: Sendable {
     let endTime: Double
     let embedding256: [Float]
     let rho128: [Double]
+    let rhoNormalized128: [Double]
 }
 
 // MARK: - Convenience Methods

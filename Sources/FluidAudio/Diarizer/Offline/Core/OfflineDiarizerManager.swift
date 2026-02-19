@@ -206,7 +206,7 @@ public final class OfflineDiarizerManager {
             throw OfflineDiarizationError.noSpeechDetected
         }
 
-        let embeddingFeatures = timedEmbeddings.map { $0.embedding256.map { Double($0) } }
+        let embeddingFeatures = timedEmbeddings.map { $0.rhoNormalized128 }
         let rhoFeatures = timedEmbeddings.map { $0.rho128 }
 
         let clusteringStart = Date()
@@ -742,6 +742,7 @@ public final class OfflineDiarizerManager {
             let endTime: Double
             let embedding256: [Float]
             let rho128: [Double]
+            let rhoNormalized128: [Double]
             let cluster: Int
         }
 
@@ -761,6 +762,7 @@ public final class OfflineDiarizerManager {
                     endTime: embedding.endTime,
                     embedding256: embedding.embedding256,
                     rho128: embedding.rho128,
+                    rhoNormalized128: embedding.rhoNormalized128,
                     cluster: cluster
                 )
             )
