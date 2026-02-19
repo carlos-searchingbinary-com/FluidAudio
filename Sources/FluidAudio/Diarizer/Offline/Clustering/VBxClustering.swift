@@ -688,7 +688,7 @@ struct VBxClustering {
         initialClusters: [Int],
         constraints: SpeakerCountConstraints?
     ) -> VBxOutput {
-        var output = refine(rhoFeatures: rhoFeatures, initialClusters: initialClusters)
+        let output = refine(rhoFeatures: rhoFeatures, initialClusters: initialClusters)
 
         guard let constraints = constraints else {
             return output
@@ -701,22 +701,53 @@ struct VBxClustering {
 
         let targetCount = constraints.targetCount(detectedCount: detectedCount)
         logger.info(
-            "Speaker count \(detectedCount) outside bounds [\(constraints.minSpeakers), \(constraints.maxSpeakers)]; re-clustering to \(targetCount)"
+            "Speaker count \(detectedCount) outside bounds [\(constraints.minSpeakers), \(constraints.maxSpeakers)]; bisecting AHC threshold for \(targetCount) speakers"
         )
 
-        let (kmeansClusters, centroids) = KMeansClustering.clusterWithCentroids(
-            embeddings: trainingEmbeddings,
-            numClusters: targetCount,
-            maxIterations: 100
-        )
+        // Binary search on AHC threshold to find target speaker count
+        var lo: Double = 0.0
+        var hi: Double = 2.0
+        let ahc = AHCClustering()
+        var bestClusters = initialClusters
+        var bestDiff = abs(detectedCount - targetCount)
+
+        for _ in 0..<20 {
+            let mid = (lo + hi) / 2.0
+            let clusters = ahc.cluster(
+                embeddingFeatures: trainingEmbeddings,
+                threshold: mid
+            )
+            let numClusters = Set(clusters).count
+
+            if numClusters == targetCount {
+                bestClusters = clusters
+                bestDiff = 0
+                break
+            }
+
+            let diff = abs(numClusters - targetCount)
+            if diff < bestDiff {
+                bestDiff = diff
+                bestClusters = clusters
+            }
+
+            if numClusters > targetCount {
+                lo = mid
+            } else {
+                hi = mid
+            }
+        }
+
+        // Re-run VBx with the best AHC clusters
+        let refinedOutput = refine(rhoFeatures: rhoFeatures, initialClusters: bestClusters)
 
         return VBxOutput(
-            gamma: output.gamma,
-            pi: output.pi,
-            hardClusters: [kmeansClusters],
-            centroids: centroids,
-            numClusters: targetCount,
-            elbos: output.elbos,
+            gamma: refinedOutput.gamma,
+            pi: refinedOutput.pi,
+            hardClusters: refinedOutput.hardClusters,
+            centroids: refinedOutput.centroids,
+            numClusters: refinedOutput.numClusters,
+            elbos: refinedOutput.elbos,
             wasAdjusted: true,
             originalClusterCount: detectedCount
         )
