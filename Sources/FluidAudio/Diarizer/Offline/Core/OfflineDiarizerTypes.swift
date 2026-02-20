@@ -159,11 +159,20 @@ public struct OfflineDiarizerConfig: Sendable {
 
     public struct PostProcessing: Sendable {
         public var minGapDurationSeconds: Double
+        /// When true, cross-speaker overlaps are resolved using a sweep-line
+        /// algorithm that assigns each time point to the speaker with the longest
+        /// covering segment (highest confidence). When false, overlaps are handled
+        /// by simple trimming (legacy `excludeOverlaps` behavior).
+        public var resolveOverlaps: Bool
 
-        public static let community = PostProcessing(minGapDurationSeconds: 0.1)
+        public static let community = PostProcessing(
+            minGapDurationSeconds: 0.1,
+            resolveOverlaps: true
+        )
 
-        public init(minGapDurationSeconds: Double) {
+        public init(minGapDurationSeconds: Double, resolveOverlaps: Bool = true) {
             self.minGapDurationSeconds = minGapDurationSeconds
+            self.resolveOverlaps = resolveOverlaps
         }
     }
 
@@ -409,6 +418,14 @@ public struct OfflineDiarizerConfig: Sendable {
     public var minGapDuration: Double {
         get { postProcessing.minGapDurationSeconds }
         set { postProcessing.minGapDurationSeconds = newValue }
+    }
+
+    /// When true, cross-speaker overlaps are resolved by assigning each time
+    /// point to the best speaker (sweep-line). When false, overlaps are trimmed
+    /// (legacy behavior). Default: true.
+    public var resolveOverlaps: Bool {
+        get { postProcessing.resolveOverlaps }
+        set { postProcessing.resolveOverlaps = newValue }
     }
 
     public var embeddingExportPath: String? {

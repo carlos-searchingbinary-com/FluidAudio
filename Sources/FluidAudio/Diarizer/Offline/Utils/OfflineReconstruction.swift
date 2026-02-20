@@ -278,6 +278,145 @@ struct OfflineReconstruction {
         return database
     }
 
+    // MARK: - Sweep-Line Overlap Resolution
+
+    /// Resolve cross-speaker overlaps using a sweep-line algorithm.
+    ///
+    /// When two speakers are active simultaneously (interruptions, crosstalk),
+    /// this assigns each time point to exactly one speaker — the one whose
+    /// covering segment is longest (highest confidence). Unlike `excludeOverlaps()`
+    /// which clips overlapping regions (data loss), this preserves all speech time.
+    ///
+    /// Algorithm:
+    /// 1. Collect all segment start/end times as boundary points
+    /// 2. For each micro-interval between boundaries, find all active speakers
+    /// 3. Pick the speaker with the longest covering segment
+    /// 4. Merge consecutive intervals with the same speaker
+    /// 5. Filter by minimum duration
+    ///
+    /// Ported from DoryDiarizer's SegmentReconstructor.resolveOverlaps().
+    func resolveOverlaps(in segments: [TimedSpeakerSegment]) -> [TimedSpeakerSegment] {
+        guard segments.count > 1 else { return segments }
+
+        let sorted = segments.sorted { $0.startTimeSeconds < $1.startTimeSeconds }
+
+        // Check if there are actually any cross-speaker overlaps
+        var hasOverlap = false
+        for i in 0..<(sorted.count - 1) {
+            if sorted[i].endTimeSeconds > sorted[i + 1].startTimeSeconds
+                && sorted[i].speakerId != sorted[i + 1].speakerId
+            {
+                hasOverlap = true
+                break
+            }
+        }
+        guard hasOverlap else { return segments }
+
+        // Step 1: Collect all unique time boundaries
+        var times = Set<Float>()
+        for seg in segments {
+            times.insert(seg.startTimeSeconds)
+            times.insert(seg.endTimeSeconds)
+        }
+        let boundaries = times.sorted()
+        guard boundaries.count >= 2 else { return segments }
+
+        // Step 2: For each micro-interval, pick the best speaker
+        // Best = longest covering segment (more context = higher confidence)
+        struct ResolvedInterval {
+            let speakerId: String
+            let embedding: [Float]
+            let qualityScore: Float
+            let start: Float
+            let end: Float
+        }
+
+        var resolved: [ResolvedInterval] = []
+
+        for i in 0..<(boundaries.count - 1) {
+            let intervalStart = boundaries[i]
+            let intervalEnd = boundaries[i + 1]
+            let intervalMid = (intervalStart + intervalEnd) / 2.0
+
+            // Find the segment with the longest duration that covers this interval
+            var bestSegment: TimedSpeakerSegment?
+            var bestDuration: Float = -1
+
+            for seg in segments {
+                if seg.startTimeSeconds <= intervalMid && seg.endTimeSeconds > intervalMid {
+                    if seg.durationSeconds > bestDuration {
+                        bestDuration = seg.durationSeconds
+                        bestSegment = seg
+                    }
+                }
+            }
+
+            guard let winner = bestSegment else { continue }
+
+            resolved.append(ResolvedInterval(
+                speakerId: winner.speakerId,
+                embedding: winner.embedding,
+                qualityScore: winner.qualityScore,
+                start: intervalStart,
+                end: intervalEnd
+            ))
+        }
+
+        guard let first = resolved.first else { return [] }
+
+        // Step 3: Merge consecutive intervals with the same speaker
+        let floatTolerance: Float = 0.001
+        let minimumDuration = Float(config.minSegmentDuration)
+
+        var merged: [TimedSpeakerSegment] = []
+        var currentId = first.speakerId
+        var currentEmbedding = first.embedding
+        var currentStart = first.start
+        var currentEnd = first.end
+        var qualitySum: Float = first.qualityScore
+        var qualityCount: Int = 1
+
+        for interval in resolved.dropFirst() {
+            if interval.speakerId == currentId && interval.start <= currentEnd + floatTolerance {
+                // Same speaker, contiguous — extend
+                currentEnd = interval.end
+                qualitySum += interval.qualityScore
+                qualityCount += 1
+            } else {
+                // Different speaker or gap — flush current
+                if currentEnd - currentStart >= minimumDuration {
+                    merged.append(TimedSpeakerSegment(
+                        speakerId: currentId,
+                        embedding: currentEmbedding,
+                        startTimeSeconds: currentStart,
+                        endTimeSeconds: currentEnd,
+                        qualityScore: qualitySum / Float(qualityCount)
+                    ))
+                }
+                currentId = interval.speakerId
+                currentEmbedding = interval.embedding
+                currentStart = interval.start
+                currentEnd = interval.end
+                qualitySum = interval.qualityScore
+                qualityCount = 1
+            }
+        }
+        // Flush last
+        if currentEnd - currentStart >= minimumDuration {
+            merged.append(TimedSpeakerSegment(
+                speakerId: currentId,
+                embedding: currentEmbedding,
+                startTimeSeconds: currentStart,
+                endTimeSeconds: currentEnd,
+                qualityScore: qualitySum / Float(qualityCount)
+            ))
+        }
+
+        return merged
+    }
+
+    // MARK: - Legacy Overlap Exclusion
+
     private func excludeOverlaps(in segments: [TimedSpeakerSegment]) -> [TimedSpeakerSegment] {
         guard !segments.isEmpty else { return [] }
 
@@ -411,7 +550,13 @@ struct OfflineReconstruction {
         }
 
         if config.embeddingExcludeOverlap {
-            ordered = excludeOverlaps(in: ordered)
+            // Sweep-line resolution: assigns overlap to the best speaker (no data loss).
+            // Falls back to legacy exclusion if resolveOverlaps is disabled.
+            if config.resolveOverlaps {
+                ordered = resolveOverlaps(in: ordered)
+            } else {
+                ordered = excludeOverlaps(in: ordered)
+            }
         }
 
         return ordered
